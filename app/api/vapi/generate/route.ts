@@ -1,59 +1,178 @@
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
-import { getRandomInterviewCover } from "@/lib/utils";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import Groq from "groq-sdk";
 import { db } from "@/firebase/admin";
+import { getRandomInterviewCover } from "@/lib/utils";
 
-export async function GET() {
-  return Response.json({ success: true, data: "THANK YOU!" });
-}
-
-const googleStable = createGoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-  baseURL: "https://generativelanguage.googleapis.com/v1", // Forces the stable API
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY!,
 });
 
 export async function POST(request: Request) {
   try {
-  
-    const { type, role, level, techstack, amount, userid } = await request.json();
+    const body = await request.json();
+    const { userid, transcript } = body;
 
-    // 1. Switched to gemini-1.5-flash for better stability on Free Tier
-    const { text: questions } = await generateText({
-      model: google("gemini-2.0-flash-001"), 
-      prompt: `Prepare a JSON array of interview questions.
-        Role: ${role}, Level: ${level}, Tech: ${techstack}, Type: ${type}, Count: ${amount}.
-        Return ONLY a plain JSON array of strings. No markdown, no backticks, no special characters.
-        Example: ["Question 1", "Question 2"]`,
+    console.log("POST /api/vapi/generate HIT");
+    console.log("BODY:", body);
+
+    /**
+     * =========================================================
+     * ONLY VALID FLOW → TRANSCRIPT AFTER CALL
+     * =========================================================
+     */
+    if (!userid || !transcript) {
+      return Response.json(
+        { success: false, message: "Transcript and userid required" },
+        { status: 400 }
+      );
+    }
+
+    console.log("🧠 Extracting interview config from transcript...");
+
+    const conversationText = transcript
+      .map((m: any) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    /**
+     * =========================================================
+     * STEP 1 → AI CONFIG EXTRACTION (STRICT JSON)
+     * =========================================================
+     */
+    const extract = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: `
+You MUST return ONLY valid JSON.
+No explanation. No markdown.
+
+Format:
+{
+  "role": string,
+  "level": string,
+  "techstack": string[],
+  "amount": number
+}
+          `,
+        },
+        {
+          role: "user",
+          content: conversationText,
+        },
+      ],
+      temperature: 0,
+      max_tokens: 150,
     });
 
-    // 2. Defensive Parsing: Clean the AI response of potential markdown backticks
-    const cleanedQuestions = JSON.parse(questions.replace(/```json|```/g, "").trim());
+    let config = {
+      role: "Unknown role",
+      level: "unknown",
+      techstack: [] as string[],
+      amount: 5,
+    };
 
+    try {
+      let raw = extract.choices[0]?.message?.content || "";
+
+      // remove markdown if present
+      raw = raw.replace(/```json|```/g, "").trim();
+
+      // extract first JSON object safely
+      const match = raw.match(/\{[\s\S]*\}/);
+
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+
+        config = {
+          role: parsed.role || config.role,
+          level: parsed.level || config.level,
+          techstack: Array.isArray(parsed.techstack)
+            ? parsed.techstack
+            : [parsed.techstack].filter(Boolean),
+          amount: Number(parsed.amount) || config.amount,
+        };
+      } else {
+        console.log("⚠️ No JSON object found in AI response");
+      }
+    } catch {
+      console.log("⚠️ Failed to parse extracted config → using defaults");
+    }
+
+    console.log("✅ Extracted config:", config);
+
+    /**
+     * =========================================================
+     * STEP 2 → GENERATE QUESTIONS USING EXTRACTED CONFIG
+     * =========================================================
+     */
+    console.log("🤖 Generating interview questions...");
+
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: "Return ONLY a valid JSON array of interview questions.",
+        },
+        {
+          role: "user",
+          content: `
+Generate ${config.amount} interview questions.
+
+Role: ${config.role}
+Level: ${config.level}
+Tech stack: ${config.techstack.join(", ")}
+
+Return ONLY JSON:
+["Question 1", "Question 2"]
+          `,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+    });
+
+    let questions: string[] = [];
+
+    try {
+      let raw = completion.choices[0]?.message?.content || "";
+      raw = raw.replace(/```json|```/g, "").trim();
+      questions = JSON.parse(raw);
+    } catch {
+      console.log("⚠️ Failed to parse generated questions → using fallback");
+      questions = ["Tell me about yourself."];
+    }
+
+    /**
+     * =========================================================
+     * STEP 3 → SAVE FINAL INTERVIEW TO FIRESTORE
+     * =========================================================
+     */
     const interview = {
-      role,
-      type,
-      level,
-      techstack: techstack.split(",").map((s: string) => s.trim()), // Clean spaces
-      questions: cleanedQuestions,
-      userId: userid,
+      role: config.role,
+      level: config.level,
+      techstack: config.techstack,
+      amount: config.amount,
+      questions,
+      transcript,
+      callCompleted: true,
       finalized: true,
+      userId: userid,
       coverImage: getRandomInterviewCover(),
       createdAt: new Date().toISOString(),
     };
 
     const docRef = await db.collection("interviews").add(interview);
 
-    return Response.json({ success: true, id: docRef.id }, { status: 200 });
+    console.log("✅ Final AI interview saved:", docRef.id);
 
+    return Response.json({ success: true, id: docRef.id }, { status: 200 });
   } catch (error: any) {
-    console.error("Error generating content:", error);
-    
-    // If it's a quota error (429), return a specific message
-    const status = error.statusCode === 429 ? 429 : 500;
+    console.error("❌ Route error:", error);
+
     return Response.json(
-      { success: false, message: error.message || "Internal Server Error" }, 
-      { status }
+      { success: false, message: error.message || "Internal Server Error" },
+      { status: 500 }
     );
   }
 }

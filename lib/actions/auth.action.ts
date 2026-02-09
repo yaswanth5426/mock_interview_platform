@@ -90,6 +90,12 @@ export async function signIn(params: SignInParams) {
   }
 }
 
+export async function signOut() {
+  const cookieStore = await cookies();
+
+  cookieStore.delete("session");
+}
+
 export async function getCurrentUser(): Promise<User | null> {
   const cookieStore = await cookies();
 
@@ -118,7 +124,38 @@ export async function getCurrentUser(): Promise<User | null> {
   }
 }
 
-// Check if user is authenticated
+export async function getInterviewsByUserId(userId: string): Promise<Interview[] | null> {
+    
+  const interviews = await db.collection('interviews').where('userId', '==', userId).orderBy('createdAt', 'desc').get();
+
+    return interviews.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+    })) as Interview[];
+    
+}  
+
+export async function getLatestInterviews(
+  params: GetLatestInterviewsParams
+): Promise<Interview[] | null> {
+  const { userId, limit } = params;
+
+  const interviews = await db
+    .collection('interviews')
+    .where('finalized', '==', true)
+    .where('userId', '!=', userId)
+    .orderBy('userId')          // required for '!=' filter
+    .orderBy('createdAt', 'desc')
+    .limit(limit)
+    .get();
+
+  return interviews.docs.map((doc) => ({
+    id: doc.id,
+    ...doc.data(),
+  })) as Interview[];
+}
+
+
 export async function isAuthenticated() {
   const user = await getCurrentUser();
   return !!user;
