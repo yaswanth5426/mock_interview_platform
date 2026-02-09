@@ -16,7 +16,7 @@ export async function POST(request: Request) {
 
     /**
      * =========================================================
-     * ONLY VALID FLOW → TRANSCRIPT AFTER CALL
+     * VALIDATION
      * =========================================================
      */
     if (!userid || !transcript) {
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 
     /**
      * =========================================================
-     * STEP 1 → AI CONFIG EXTRACTION (STRICT JSON)
+     * STEP 1 → AI CONFIG EXTRACTION (INCLUDING TYPE)
      * =========================================================
      */
     const extract = await groq.chat.completions.create({
@@ -46,12 +46,18 @@ export async function POST(request: Request) {
 You MUST return ONLY valid JSON.
 No explanation. No markdown.
 
+Interview type rules:
+- "technical" → coding, SQL, system design, algorithms, tools
+- "behavioral" → teamwork, leadership, conflict, HR style
+- "mixed" → combination of both
+
 Format:
 {
   "role": string,
   "level": string,
   "techstack": string[],
-  "amount": number
+  "amount": number,
+  "type": "technical" | "behavioral" | "mixed"
 }
           `,
         },
@@ -61,23 +67,29 @@ Format:
         },
       ],
       temperature: 0,
-      max_tokens: 150,
+      max_tokens: 200,
     });
 
+    /**
+     * =========================================================
+     * SAFE PARSING
+     * =========================================================
+     */
     let config = {
       role: "Unknown role",
       level: "unknown",
       techstack: [] as string[],
       amount: 5,
+      type: "mixed" as "technical" | "behavioral" | "mixed",
     };
 
     try {
       let raw = extract.choices[0]?.message?.content || "";
 
-      // remove markdown if present
+      // remove markdown
       raw = raw.replace(/```json|```/g, "").trim();
 
-      // extract first JSON object safely
+      // extract JSON safely
       const match = raw.match(/\{[\s\S]*\}/);
 
       if (match) {
@@ -90,6 +102,7 @@ Format:
             ? parsed.techstack
             : [parsed.techstack].filter(Boolean),
           amount: Number(parsed.amount) || config.amount,
+          type: parsed.type || config.type,
         };
       } else {
         console.log("⚠️ No JSON object found in AI response");
@@ -121,6 +134,7 @@ Generate ${config.amount} interview questions.
 
 Role: ${config.role}
 Level: ${config.level}
+Interview type: ${config.type}
 Tech stack: ${config.techstack.join(", ")}
 
 Return ONLY JSON:
@@ -145,11 +159,12 @@ Return ONLY JSON:
 
     /**
      * =========================================================
-     * STEP 3 → SAVE FINAL INTERVIEW TO FIRESTORE
+     * STEP 3 → SAVE FINAL INTERVIEW
      * =========================================================
      */
     const interview = {
       role: config.role,
+      type: config.type, // ⭐ dynamic type saved
       level: config.level,
       techstack: config.techstack,
       amount: config.amount,
