@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { createVapi } from "@/lib/vapi.sdk";
+import { interviewer as interviewerConfig } from "@/constants"; // ← renamed to avoid conflict
 
 // ---------------- ENUMS & TYPES ----------------
 
@@ -24,17 +25,16 @@ interface SavedMessage {
 interface AgentProps {
   userName?: string;
   userId?: string;
+  interviewId?: string;
   type: "generate" | "interview";
   questions?: string[];
-  interviewer?: string;
 }
 
 // ---------------- COMPONENT ----------------
 
-const Agent = ({ userName, userId, type, questions, interviewer }: AgentProps) => {
+const Agent = ({ userName, userId, type, questions, interviewId }: AgentProps) => {
   const router = useRouter();
 
-  // 🔑 SINGLE VAPI INSTANCE
   const vapiRef = useRef<any>(null);
   if (!vapiRef.current) vapiRef.current = createVapi();
   const vapi = vapiRef.current;
@@ -93,12 +93,42 @@ const Agent = ({ userName, userId, type, questions, interviewer }: AgentProps) =
   }, [vapi]);
 
   // ---------------- SEND TRANSCRIPT AFTER CALL ----------------
+  useEffect(() => {
+    if (messages.length > 0) {
+      setLastMessage(messages[messages.length - 1].content);
+    }
+
+    const handleGenerateFeedback = async (messages: SavedMessage[]) => {
+      console.log("handleGenerateFeedback");
+
+      const { success, feedbackId: id } = await createFeedback({
+        interviewId: interviewId!,
+        userId: userId!,
+        transcript: messages,
+        feedbackId,
+      });
+
+      if (success && id) {
+        router.push(`/interview/${interviewId}/feedback`);
+      } else {
+        console.log("Error saving feedback");
+        router.push("/");
+      }
+    };
+
+    if (callStatus === CallStatus.FINISHED) {
+      if (type === "generate") {
+        router.push("/");
+      } else {
+        handleGenerateFeedback(messages);
+      }
+    }
+  }, [messages, callStatus, interviewId, router, type, userId]);
 
   useEffect(() => {
     if (callStatus !== CallStatus.FINISHED) return;
     if (messages.length === 0) return;
-
-    console.log("🚀 Sending transcript to backend:", messages);
+    if (type !== "generate") return;  // ← add this line
 
     const sendTranscript = async () => {
       try {
@@ -120,8 +150,7 @@ const Agent = ({ userName, userId, type, questions, interviewer }: AgentProps) =
     };
 
     sendTranscript();
-  }, [callStatus, messages, router, userId]);
-
+  }, [callStatus, messages, router, userId, type]);  // ← add type to deps
   // ---------------- HANDLE CALL ----------------
 
   const handleCall = async () => {
@@ -129,18 +158,6 @@ const Agent = ({ userName, userId, type, questions, interviewer }: AgentProps) =
       vapi.stop();
       setCallStatus(CallStatus.CONNECTING);
 
-      /**
-       * =====================================================
-       * STEP 1 → CREATE INTERVIEW BEFORE STARTING CALL
-       * =====================================================
-       */
-    
-
-      /**
-       * =====================================================
-       * STEP 2 → START VAPI CALL
-       * =====================================================
-       */
       if (type === "generate") {
         await vapi.start(
           undefined,
@@ -153,8 +170,20 @@ const Agent = ({ userName, userId, type, questions, interviewer }: AgentProps) =
         const formattedQuestions =
           questions?.map((q) => `- ${q}`).join("\n") || "";
 
-        await vapi.start(interviewer!, {
-          variableValues: { questions: formattedQuestions },
+        await vapi.start({
+          ...interviewerConfig,  // ← using renamed import
+          model: {
+            ...interviewerConfig.model,
+            messages: [
+              {
+                role: "system",
+                content: interviewerConfig.model.messages[0].content.replace(
+                  "{{questions}}",
+                  formattedQuestions
+                ),
+              },
+            ],
+          },
         });
       }
     } catch (err) {
