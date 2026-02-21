@@ -14,7 +14,13 @@ const Page = async () => {
     getLatestInterviews({ userId: user?.id!, limit: 20 }),
   ]);
 
-  const hasPastInterviews = (userInterviews?.length ?? 0) > 0;
+  // ✅ Filter completed interviews only for "Your Interviews"
+  const completedInterviews = userInterviews?.filter(
+    (interview) => interview.callCompleted === true
+  ) ?? [];
+
+  // ✅ Use allInterview (from other users) for "Take an Interview"
+  const hasPastInterviews = completedInterviews.length > 0;
   const hasUpcomingInterviews = (allInterview?.length ?? 0) > 0;
 
   return (
@@ -47,7 +53,7 @@ const Page = async () => {
 
         <div className="interviews-section">
           {hasPastInterviews ? (
-            userInterviews?.map((interview) => (
+            completedInterviews.map((interview) => (
               <InterviewCard {...interview} key={interview.id} />
             ))
           ) : (

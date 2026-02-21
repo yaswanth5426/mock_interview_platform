@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { createVapi } from "@/lib/vapi.sdk";
 import { interviewer as interviewerConfig } from "@/constants"; // ← renamed to avoid conflict
-
+import { createFeedback } from "@/lib/actions/general.action";
 // ---------------- ENUMS & TYPES ----------------
 
 enum CallStatus {
@@ -105,7 +105,7 @@ const Agent = ({ userName, userId, type, questions, interviewId }: AgentProps) =
         interviewId: interviewId!,
         userId: userId!,
         transcript: messages,
-        feedbackId,
+        
       });
 
       if (success && id) {
