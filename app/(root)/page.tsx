@@ -14,18 +14,41 @@ const Page = async () => {
     getLatestInterviews({ userId: user?.id!, limit: 20 }),
   ]);
 
-  // ✅ Filter completed interviews only for "Your Interviews"
-  const completedInterviews = userInterviews?.filter(
-    (interview) => interview.callCompleted === true
-  ) ?? [];
+  // Helper function to check if feedback exists
+  const checkFeedback = async (interviewId: string) => {
+    try {
+      const { getFeedbackByInterviewId } = await import("@/lib/actions/general.action");
+      const feedback = await getFeedbackByInterviewId({
+        interviewId,
+        userId: user?.id!,
+      });
+      return !!feedback;
+    } catch {
+      return false;
+    }
+  };
 
-  // ✅ Use allInterview (from other users) for "Take an Interview"
+  // Split interviews based on feedback existence
+  const interviewsWithFeedbackStatus = await Promise.all(
+    (userInterviews || []).map(async (interview) => ({
+      ...interview,
+      hasFeedback: await checkFeedback(interview.id),
+    }))
+  );
+
+  const completedInterviews = interviewsWithFeedbackStatus.filter(
+    (interview) => interview.hasFeedback
+  );
+
+  const pendingInterviews = interviewsWithFeedbackStatus.filter(
+    (interview) => !interview.hasFeedback
+  );
+
   const hasPastInterviews = completedInterviews.length > 0;
-  const hasUpcomingInterviews = (allInterview?.length ?? 0) > 0;
+  const hasUpcomingInterviews = pendingInterviews.length > 0;
 
   return (
     <>
-      {/* CTA Section */}
       <section className="card-cta">
         <div className="flex flex-col gap-6 max-w-lg">
           <h2>Get Interview-Ready with AI-powered Practice & Feedback</h2>
@@ -47,14 +70,21 @@ const Page = async () => {
         />
       </section>
 
-      {/* Your Interviews */}
       <section className="flex flex-col gap-6 mt-8">
         <h2>Your Interviews</h2>
 
         <div className="interviews-section">
           {hasPastInterviews ? (
             completedInterviews.map((interview) => (
-              <InterviewCard {...interview} key={interview.id} />
+              <InterviewCard
+                key={interview.id}
+                userId={user?.id}
+                interviewId={interview.id}
+                role={interview.role}
+                type={interview.type}
+                techstack={interview.techstack}
+                createdAt={interview.createdAt}
+              />
             ))
           ) : (
             <p>You haven&apos;t taken any interviews yet</p>
@@ -62,17 +92,24 @@ const Page = async () => {
         </div>
       </section>
 
-      {/* Take an Interview */}
       <section className="flex flex-col gap-6 mt-8">
         <h2>Take an Interview</h2>
 
         <div className="interviews-section">
           {hasUpcomingInterviews ? (
-            allInterview!.map((interview) => (
-              <InterviewCard {...interview} key={interview.id} />
+            pendingInterviews.map((interview) => (
+              <InterviewCard
+                key={interview.id}
+                userId={user?.id}
+                interviewId={interview.id}
+                role={interview.role}
+                type={interview.type}
+                techstack={interview.techstack}
+                createdAt={interview.createdAt}
+              />
             ))
           ) : (
-            <p>There are no upcoming interviews available</p>
+            <p>No interviews ready to take. Generate one first!</p>
           )}
         </div>
       </section>
